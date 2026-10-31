@@ -1037,34 +1037,25 @@ def run(tray_mode: bool = False):
             _boot("webview.start() returned (window mode)")
             return
 
-        # Tray mode: 双击 EXE 就**自动起服务并直接显示主窗口**，
-        # 托盘继续驻留以便关闭窗口后还能唤回。
+        # Tray mode: 双击 EXE **只起服务，不弹面板**。
         #
-        # 改之前是「只放托盘图标，服务和窗口都要右键菜单点」—— 用户双击后
-        # 桌面什么都没有，以为没启动，只能去托盘里翻（这是实测反馈）。
-        # 现在：托盘是**兜底**，不是入口。
+        # 面板必须由用户主动从托盘菜单点「打开控制台」才出现 —— 双击就弹窗
+        # 会挡住桌面（这是本机实测反馈：启动只是为了跑 /v1 网关，不需要看界面）。
         #
         # pywebview 的 GUI 循环在没有窗口时会退出，所以仍然需要一个宿主窗口；
-        # 但托盘模式下它同时就是主窗口（不再是 1x1 隐藏窗口）。
+        # 这里用 1x1 隐藏窗，并且**不赋给 api.window** —— 于是 api.window 保持
+        # None，`open_window()` 里 `_window_alive(None)` 为 False，会新建一个
+        # 真正的面板窗口并 load_url 到 /admin（而不是把隐藏宿主窗 show 出来）。
         threading.Thread(target=api._state_monitor, name="tray-state", daemon=True).start()
-        tray.notify("MiraiHub 已启动，正在打开界面…")
+        webview.create_window("__tray_host__", html="<!doctype html><title></title>",
+                              width=1, height=1, frameless=True, hidden=True)
+        tray.notify("MiraiHub 已在托盘运行，正在启动本地服务…")
         api.tray_startup_update_check = True
 
-        # 主窗口在托盘模式下也要能打开 —— 和窗口模式同一个 SPLASH 页面，
-        # 由 Bridge 驱动启动进度。
-        window = webview.create_window(
-            f"MiraiHub · v{VERSION}", html=SPLASH, js_api=Bridge(api),
-            width=1280, height=860, min_size=(900, 600),
-            background_color="#f5f6f8", text_select=True, frameless=True,
-            easy_drag=False)
-        api.window = window
-        # 关闭窗口 = 收进托盘（不停服务）。真正退出走托盘菜单的「退出」。
-        window.events.closing += api.on_window_closing
-        _boot("window created (tray mode)")
-
         def start_tray_shell():
-            # 先起服务，再显示窗口：服务没起来时页面会自己显示重试按钮，
-            # 比先亮窗口再转圈更清楚。
+            # 只起服务（含 /v1 网关），**不打开面板**。
+            # 先起服务再让用户点托盘打开：那时窗口 load_url 直接命中可用端口，
+            # 不会先亮一个「正在连接」的页面。
             _boot("start_tray_shell entered")
             api.retry_runtime()
             api.retry_start()
