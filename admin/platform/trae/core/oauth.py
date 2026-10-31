@@ -83,21 +83,85 @@ def _b64url(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-#: 主服务的监听地址（回调要落到它上面）
-MAIN_HOST = os.environ.get("WB_OAUTH_CALLBACK_HOST", "127.0.0.1")
-MAIN_PORT = os.environ.get("WB_OAUTH_CALLBACK_PORT", "8790")
 #: 回调**路径**必须是 `/authorize` —— 上游按路径校验，
 #: 换成 `/api/...` 这种自定义路径会直接 Login Failed。
-#: 我们用主服务的 8790 端口，但路径保持客户端原样。
 CALLBACK_PATH = "/authorize"
+
+#: 桌面版启动后会把自己的真实端口写进这个环境变量。
+#: 桌面版并不固定用 8790：`select_port()` 在端口被占时会换一个，
+#: 所以回调地址**必须**跟着实际端口走。
+_PORT_ENV = "WB_OAUTH_CALLBACK_PORT"
+_HOST_ENV = "WB_OAUTH_CALLBACK_HOST"
+
+
+def main_port() -> str:
+    """当前主服务真正监听的端口。
+
+    ## 为什么不能写死 8790
+
+    桌面版每个用户的端口都可能不同（8790 被占就换 8791/8792…，极端情况
+    系统随机分配）。回调地址写死 8790 时，服务实际跑在 54293 的用户点
+    「授权登录」→ 浏览器跳 `http://127.0.0.1:8790/authorize` → **连不上**，
+    表现为「授权完成后一直转圈 / 打不开页面」。
+
+    取值顺序：
+      1. `ADMIN_PORT`（运行期真实监听端口，桌面版由 `--backend <port>` 注入）
+      2. `WB_OAUTH_CALLBACK_PORT`（显式覆盖）
+      3. 最后才回落到 8790（源码直接跑、没设环境变量时）
+    """
+    for key in ("ADMIN_PORT", _PORT_ENV):
+        value = (os.environ.get(key) or "").strip()
+        if value.isdigit() and 1 <= int(value) <= 65535:
+            return value
+    return "8790"
+
+
+#: 显式指定的「对外可达」回调基址（含协议与端口），优先级最高。
+#: 部署在服务器 / 反代后面时设它，例如 https://2api.example.com
+_PUBLIC_ENV = "WB_OAUTH_PUBLIC_BASE"
+
+
+def public_base() -> str:
+    """对外可达的回调基址；空串表示没有配置，退化为本机回环。"""
+    return (os.environ.get(_PUBLIC_ENV) or "").strip().rstrip("/")
+
+
+def main_host() -> str:
+    """回调用的主机名。
+
+    ## 三种部署形态
+
+    · **桌面版**：浏览器和网关在同一台机器，`127.0.0.1` 最省事，也不会把
+      授权入口暴露到局域网。
+    · **服务器部署**：浏览器在用户自己电脑上，`127.0.0.1` 指的是**用户本机**
+      而不是服务器 —— 回调必然打不开。这时必须配 `WB_OAUTH_PUBLIC_BASE`。
+    · **反代 / 域名**：同上，填公网域名。
+
+    判断「用户浏览器会不会和网关在同一台机器」不现实，所以这里只按配置走：
+    配了公网基址就用它，没配就是本机。
+    """
+    return (os.environ.get(_HOST_ENV) or "").strip() or "127.0.0.1"
 
 
 def callback_url() -> str:
     """授权完成后的回调地址（指向主服务，不单开端口）。
 
-    用环境变量可覆盖 —— 部署在反代后面时公网地址和本地不同。
+    **每次调用都重新读环境变量**，不做模块级缓存 —— 端口是启动后才知道的，
+    缓存会让它在服务换端口后还返回旧值。
+
+    优先级：
+      1. `WB_OAUTH_PUBLIC_BASE` —— 显式公网基址（服务器部署用这个）
+      2. `http://<host>:<port>` —— 本机回环（桌面版默认）
+
+    ## 为什么公网基址要单独一个变量
+
+    「主机 + 端口」拼不出 HTTPS、也拼不出反代路径前缀（`/gw/trae`）。
+    公网部署时真正需要的是**一个完整基址**，不是两个零件。
     """
-    return "http://%s:%s%s" % (MAIN_HOST, MAIN_PORT, CALLBACK_PATH)
+    base = public_base()
+    if base:
+        return base + CALLBACK_PATH
+    return "http://%s:%s%s" % (main_host(), main_port(), CALLBACK_PATH)
 
 
 def free_port() -> int:

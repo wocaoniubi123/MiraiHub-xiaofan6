@@ -1035,6 +1035,344 @@ for tname, table in Base.metadata.tables.items():
 **教训**：给模型加字段时，**同一提交里必须加迁移** ——
 否则源码运行（新库）永远正常，只有老用户升级后才会炸。
 
+## 五·补18 桌面版端口漂移到随机高位端口
+
+**现象**
+
+`http://127.0.0.1:8790/v1` 明明没被占用，桌面版却跑在 `54293`（或 `50069`）
+这种随机端口，而且重启也一直用它。用户收藏的 API 地址、客户端里填的
+base_url 全都失效。
+
+**根因（两层）**
+
+第一层，端口选择只会「首选或随机」：
+
+```python
+try:
+    sock.bind(("0.0.0.0", preferred))
+except OSError:
+    sock.bind(("0.0.0.0", 0))   # 系统随便给一个
+return sock.getsockname()[1]
+```
+
+`0.0.0.0:8790` 绑不上（TIME_WAIT 堆积、端口在保留段、需要特权的场景都会
+`WinError 10013`）时，直接落到 `bind(0)`，拿到 49152–65535 段的随机端口。
+
+第二层更隐蔽：那个随机端口被 `save_port()` **写回 config.json**，
+下次启动 `preferred` 就读到 54293 —— 于是随机值变成了「用户指定的端口」，
+永远优先。**8790 从此再也回不去。**
+
+**修法**
+
+1. 端口顺序改成：首选 → 固定备选段（8790, 8791, … 8080, 8000）→ 最后才随机
+2. 首选值如果落在 **49152–65535 动态段**，视为历史兜底产物，**降到最低优先级**
+3. 随机端口**不落盘**：`save_port()` 只接受固定段内的值
+
+```python
+if 49152 <= preferred <= 65535:      # 历史随机端口
+    order = [*FALLBACK_PORTS, preferred]
+else:
+    order = [preferred, *FALLBACK_PORTS]
+```
+
+**验证**
+
+```
+8790 空闲，config=54293  -> 8790   （回到默认）
+8790 空闲，config=8790   -> 8790
+8790 被占，config=8790   -> 8791   （固定备选，不再随机）
+```
+
+**教训**：兜底策略的产物**不能反过来成为默认值**。任何「失败了就选个随机的
+再存起来」的写法，本质是在把临时状态固化成配置。
+
+## 五·补19 授权回调地址写死端口
+
+**现象**
+
+桌面版点「授权登录」，浏览器跳转到 `http://127.0.0.1:8790/authorize` 打不开
+（页面转圈或连接被拒）。服务实际跑在别的端口。
+
+**根因**
+
+```python
+MAIN_PORT = os.environ.get("WB_OAUTH_CALLBACK_PORT", "8790")
+def callback_url():
+    return "http://%s:%s%s" % (MAIN_HOST, MAIN_PORT, CALLBACK_PATH)
+```
+
+模块级常量 + 硬编码默认值。桌面版每个用户的端口都可能不同
+（见五·补18），写死 8790 必然对不上。
+
+**修法**
+
+`callback_url()` **每次调用都重新读环境变量**，并按真实优先级取值：
+
+```
+1. ADMIN_PORT            —— 运行期真实监听端口（桌面版 --backend <port> 注入）
+2. WB_OAUTH_CALLBACK_PORT —— 显式覆盖（反代/公网部署）
+3. 8790                   —— 源码直接跑时的兜底
+```
+
+关键点：**不做模块级缓存**。端口是启动后才知道的，缓存会让服务换端口后
+仍然返回旧值。
+
+## 五·补20 桌面版硬杀后 C 盘残留 `_MEI` 目录
+
+**现象**
+
+`%TEMP%` 下堆了十几个 `_MEIxxxxxx` 目录，单份 152 MB，实测累计
+**1933 MB**。用户描述「关机或重启后一直拉屎在 C 盘」。
+
+**根因**
+
+PyInstaller onefile 每次启动把运行时解压到 `%TEMP%/_MEIxxxxxx`，正常退出
+会自删。但**硬杀**（关机、重启、任务管理器结束进程、蓝屏）没有机会跑清理
+代码，目录就永久留下。
+
+**修法**
+
+在**下一次启动时**清理 —— 这是唯一可靠的时机：
+
+```python
+def cleanup_stale_mei_dirs() -> int:
+    current = os.path.normcase(os.path.abspath(sys._MEIPASS))
+    for name in os.listdir(tempfile.gettempdir()):
+        if not name.startswith("_MEI"): continue
+        path = ...
+        if os.path.abspath(path) == current: continue   # 排除自己
+        if _mei_in_use(path): continue                  # 排除活着的实例
+        shutil.rmtree(path, ignore_errors=True)
+```
+
+`_mei_in_use()` 用**独占重命名探针**判断：Windows 上正在运行的 exe/dll
+有文件句柄，改名会失败 —— 失败即认为活着，跳过。
+
+只在 `sys.frozen` 为真时执行（源码运行不该动系统 TEMP）。
+
+**验证**：实测清理 12 个目录，释放 1879.8 MB，正在用的 2 个正确保留。
+
+## 五·补21 实时区用轮询会空转，应走 SSE
+
+**现象**
+
+用量日志页的「请求动态」每 2 秒打一次 `/api/sentinel/traffic`。空闲时也在
+持续请求，多开标签页更明显；有请求时又要等到下一拍才显示。
+
+**根因**
+
+选了轮询。轮询的两块固有代价：
+
+- **空转**：无事发生也在打接口，一个打开的页面就是一条持续 QPS
+- **延迟**：事件落在两次轮询之间时要等到下一拍，最坏 2N
+
+**修法：SSE + diff 推送**
+
+```
+后端 GET /api/sentinel/traffic/stream
+  · 每 500ms 采样一次 traffic_stats.snapshot()
+  · 只推「变了的行」+ 平台计数，空闲时不发数据
+  · 每 15 秒一个注释心跳，防中间层掐闲置连接
+  · request.is_disconnected() → 生成器立即退出，不留僵尸任务
+
+前端 new EventSource(...)
+  · onmessage 按 rid 合并，按 ts 倒序保留最近 12 条
+  · EventSource 不可用时退回 3 秒轮询（不是直接空着）
+```
+
+关键响应头：`X-Accel-Buffering: no` —— nginx 默认会缓冲 SSE，
+不加这个会把整段攒着一次发，实时性完全丧失。
+
+**实测**
+
+```
+0.0s  snapshot  recent=3 running=0
+2.2s  delta     1 条变 running      ← 请求开始
+4.3s  delta     1 条变 completed    ← 请求结束
+```
+
+空闲 8 秒只 1 帧（首帧快照），有请求时事件驱动。
+
+**教训**：实时数据用 SSE，不要轮询。轮询只适合「低频、可容忍延迟」的场景。
+
+## 五·补22 备份面板看不到路径、也改不了
+
+**现象**
+
+维护页「备份数据」只有一个下载按钮：用户不知道数据库在哪、不知道备份存哪、
+也没法换目录。
+
+**根因（三层）**
+
+1. `/api/maintenance/update` 压根**不返回**备份位置字段
+2. 前端 `backupPathBlock(data)` 判断 `!data.ok` 直接返回空串 ——
+   而 `/update` 的返回里连 `ok` 都没有
+3. 静态资源 `<script src="/admin/assets/review-improvements.js">` **没有版本参数**，
+   浏览器一直用缓存里的旧 JS，代码改了也不生效
+
+**修法**
+
+- 抽出 `_backup_location(db)`，`/update` 与 `/backup/info` 共用一份
+  （两处各写一份，字段一漂移就会出现「探测说能写、面板说不存在」）
+- 新增 `PUT /api/maintenance/backup/dir`，落库到 `system_settings`
+- 面板显示两行：数据库文件（MySQL 补成 `host:port/db`，不含账号密码）、
+  备份存放位置（可改、可恢复默认、不可写时标红）
+- **所有 `/admin/assets/*` 静态资源统一加 `?v=`**，根治缓存问题
+
+**教训**：静态资源的版本参数不是可选项。没有它，前端改动在用户侧
+等于没改 —— 而开发者本地因为 cache-busting 不生效往往看不出来。
+
+## 五·补23 Trae 授权只能在桌面版用，服务器部署登录不了
+
+**现象**
+
+部署到服务器后点「授权登录」，浏览器跳 `http://127.0.0.1:8790/authorize`
+打不开 —— 这个地址指的是**用户自己电脑**，不是服务器。
+
+**根因**
+
+`callback_url()` 默认拼 `http://127.0.0.1:<port>/authorize`。桌面版浏览器和
+网关同机，没问题；服务器部署时浏览器在用户那边，回环地址必然断开。
+
+**关键认知：Trae 不能像 Qoder 那样纯轮询**
+
+翻遍官方客户端 `out/main.js`，Trae 的全部 oauth 端点只有：
+
+```
+/trae/api/v3/oauth/ExchangeToken        AuthCode 换 token
+/trae/api/v3/oauth/ClearRefreshToken
+/api/v3/trae/{CheckLogin,GetUserInfo,LoginLocal,GenerateTempToken,...}
+```
+
+**没有** `deviceToken/poll` 这类「服务端主动查授权结果」的接口。
+客户端自己也是 `http.createServer()` 起本地服务接 `/authorize` 回调。
+
+对比 Qoder：它有 `deviceToken/poll`，服务端拿 nonce+verifier 直接问，
+**不需要任何回调地址**，所以 Qoder 天生支持服务器部署。
+
+**修法：让回调地址可以是公网地址**
+
+`auth_callback_url` 只是拼进授权页的普通 query 参数，上游不校验它指向哪 ——
+填公网域名，授权完成后浏览器就跳到公网域名。
+
+```python
+def callback_url():
+    base = public_base()          # WB_OAUTH_PUBLIC_BASE
+    if base:
+        return base + CALLBACK_PATH          # https://域名/authorize
+    return "http://%s:%s%s" % (main_host(), main_port(), CALLBACK_PATH)
+```
+
+为什么要一个**完整基址**而不是 host+port：公网需要 HTTPS，反代可能带路径
+前缀（`https://a.com/gw/authorize`），两个零件拼不出来。
+
+**前端配合**
+
+`/device/start` 返回 `callback_reachable` + `callback_hint`：
+
+- 判断依据是**请求来源**，不是「有没有配 WORKBUDDY_DESKTOP」。
+  管理员用本机浏览器打开 localhost 管理台时，回环完全可用 —— 之前按
+  桌面版标志判断，源码部署被误报成不可达。
+- 不可达时弹窗换文案（「用任意设备的浏览器打开」）、显示黄色警告、
+  多一个「复制授权链接」按钮（发到手机上打开）。项目里没有 QR 依赖，
+  为一个场景引库不划算。
+
+**实测**
+
+```
+桌面版            http://127.0.0.1:8790/authorize   reachable=True
+ADMIN_PORT=8795   http://127.0.0.1:8795/authorize   reachable=True
+公网基址          https://2api.example.com/authorize  reachable=True
+带斜杠            https://a.com/authorize            （自动去尾斜杠）
+反代路径前缀      https://a.com/gw/authorize
+```
+
+**两个平台的分工**
+
+| | 授权方式 | 服务器部署 |
+|---|---|---|
+| Qoder | 设备码轮询（服务端主动查） | 原生支持，无需配置 |
+| Trae | 浏览器回调带 AuthCode | 需要 `WB_OAUTH_PUBLIC_BASE` |
+
+桌面版不需要动任何配置 —— 本地回调就是它的默认路径，也是它的最优路径。
+
+## 五·补24 四个平台的授权形态不同，前端不该硬编码
+
+**背景**
+
+想让「服务器部署也能在线登录」。逐个查过上游能力后，四个平台分三类：
+
+| 平台 | 授权形态 | 服务器部署 |
+|---|---|---|
+| WorkBuddy | 官方页面接力 + `state` 轮询 | 本来就行 |
+| Qoder | 设备码轮询（`deviceToken`） | 本来就行 |
+| Trae | PKCE + 浏览器回调带 AuthCode | 需要公网回调基址 |
+| Loomy | **上游没有登录接口** | 做不到 |
+
+**WorkBuddy 的实现**（`admin/routers/login.py`）
+
+```python
+# 官方登录页没有 X-Frame-Options，可以内嵌 iframe
+# /v2/plugin/auth/token?state= 轮询不需要任何 cookie（实测）
+# 所以服务端能独立拿到凭证，不必碰用户会话
+POST /api/join/official/start   -> {sid, auth_url}
+POST /api/join/official/poll    -> {done, ...}  完成后自动换凭证入库
+```
+
+**Qoder 的实现**（`admin/platform/qoder/core/oauth.py`）
+
+```python
+def poll_once(self):
+    # HTTP 202/404 -> None（还没授权）；200 -> 凭证
+```
+
+设备码流程：`start` 拿 nonce+verifier 拼授权 URL，服务端带这两个值去
+`deviceToken` 轮询。**浏览器在哪台机器上都无所谓。**
+
+**Loomy 为什么不行**
+
+实测它的 API 只有 5 条业务接口，登录相关的全是 404：
+
+```
+/models  /chat/completions  /points/balance  /points/records  /points/first-login
+/auth/login 404   /session 404   /session/refresh 404   /oauth/token 404
+```
+
+凭证只有一个明文 `session`，来自本机
+`C:/Users/Public/Loomy/<sha256(用户名)[:12]>/userData/auth-session.json`，
+而且**没有 refresh**。所以它只能「先在官方 App 登录 → 扫描本机导入」。
+
+**修法：把授权形态交给平台自己声明**
+
+三个平台的 `/meta` 增加两个字段：
+
+```python
+"auth_mode": "callback" | "device-poll" | "local-session-only",
+"auth_explain": "给用户看的一句话说明（含需要配什么）"
+```
+
+前端不再硬编码 `id === "qoder"`：
+
+```js
+const authMeta = await platformAuthMeta(storage);
+const supportsAuth = authMeta.auth_mode !== "local-session-only";
+const needAuth = !canImport && supportsAuth;
+```
+
+- 有授权能力的平台 → 显示「立即授权登录」
+- 没有的（Loomy）→ 隐藏按钮，改为展示 `auth_explain` 解释原因
+
+**顺手修的一个 bug**
+
+`showScanResult()` 原本是同步函数，加 `await` 后必须改成 `async`，
+调用点（`platformScanLocal` 里）同步补 `await`。
+改完跑 `node --check` 验证 —— 这类「await 出现在非 async 函数里」
+只有真正解析时才报，肉眼看不出来。
+
+**教训**：多平台架构里，**能力差异要让平台自己声明**。
+前端一旦写死「qoder 有授权、其它没有」，加第五个平台就得改前端 ——
+正确做法是问平台，平台说有什么就渲染什么。
+
 ## 六、运维
 
 ### 6.1 改完代码没真正重启
