@@ -98,20 +98,24 @@ window.WBReview = (() => {
   async function loadUpdate() {
     const mine = ++updateGeneration;
     const panel = document.getElementById('maintenanceInfo');
-    panel.textContent = '正在检查正式版本…';
+    panel.textContent = '正在读取维护信息…';
     try {
       const data = await json('/api/maintenance/update');
       if (mine !== updateGeneration) return;
-      const status = data.error || !data.latest ? '版本检查未完成' : data.available ? '有新版本可升级' : '暂无新版本';
-      const warning = !!data.error || !data.latest;
-      panel.innerHTML = '<section class="card maintenance-version"><div class="maintenance-version-head"><div><span class="maintenance-eyebrow">软件版本</span><h2>保持更新，安心使用</h2></div><span class="maintenance-status ' +
-        (warning ? 'warning' : data.available ? 'available' : '') + '"><i class="fa-solid ' +
-        (warning ? 'fa-circle-exclamation' : data.available ? 'fa-arrow-up' : 'fa-check') + '" aria-hidden="true"></i>' + status +
+      // 关闭版本检查时（桌面本地自用）不渲染版本卡片与升级命令 —— 只留备份与重启。
+      const versionCard = data.update_check === false ? '' :
+        '<section class="card maintenance-version"><div class="maintenance-version-head"><div><span class="maintenance-eyebrow">软件版本</span><h2>保持更新，安心使用</h2></div><span class="maintenance-status ' +
+        (!!data.error || !data.latest ? 'warning' : data.available ? 'available' : '') + '"><i class="fa-solid ' +
+        (!!data.error || !data.latest ? 'fa-circle-exclamation' : data.available ? 'fa-arrow-up' : 'fa-check') + '" aria-hidden="true"></i>' +
+        (data.error || !data.latest ? '版本检查未完成' : data.available ? '有新版本可升级' : '暂无新版本') +
         '</span></div><div class="maintenance-version-values"><div><span>当前版本</span><strong>' + esc(data.version) +
         '</strong></div><div><span>最新正式版</span><strong>' + esc(data.latest?.tag || '暂未获取') +
         '</strong></div><a class="console-btn" href="' + esc(data.releases_url) +
         '" target="_blank" rel="noopener noreferrer">版本与更新公告<i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i></a></div>' +
-        (data.error ? '<p class="maintenance-error">' + esc(data.error) + '</p>' : '') + '</section>' +
+        (data.error ? '<p class="maintenance-error">' + esc(data.error) + '</p>' : '') + '</section>';
+      const localVersion = data.update_check === false
+        ? '<p class="maintenance-backup-help">当前版本 <strong>' + esc(data.version) + '</strong> · 版本检查已关闭（本地自用）。</p>' : '';
+      panel.innerHTML = versionCard + localVersion +
         '<section class="card maintenance-step"><div class="maintenance-step-head"><span class="maintenance-step-number">01</span><div><h2>备份数据</h2><p>升级前先保存一份数据库备份，便于恢复账号与配置。</p></div><span class="maintenance-db">' +
         esc(String(data.database || (data.backup_supported ? 'sqlite' : '数据库')).toUpperCase()) + '</span></div>' +
         (data.backup_supported ? '<div class="maintenance-backup-actions"><button class="console-btn primary" onclick="WBReview.backup()"><i class="fa-solid fa-download" aria-hidden="true"></i>下载 SQLite 备份</button>' +
@@ -120,7 +124,9 @@ window.WBReview = (() => {
           '<p class="maintenance-backup-help">当前数据库请使用管理工具完成备份' + (data.mysql_backup_command ? '，也可以在终端使用以下命令。' : '。') + '</p>') +
         (data.mysql_backup_command ? commandBlock('maintenance-command-backup', data.mysql_backup_command) : '') +
         '<p class="maintenance-private-note"><i class="fa-solid fa-lock" aria-hidden="true"></i>备份包含账号凭据和 API Key，请私密保存。</p></section>' +
-        '<section class="card maintenance-step"><div class="maintenance-step-head"><span class="maintenance-step-number">02</span><div><h2>升级与重启</h2><p>选择当前的部署方式，在项目目录执行对应命令。</p></div></div>' +
+        '<section class="card maintenance-step"><div class="maintenance-step-head"><span class="maintenance-step-number">02</span><div><h2>升级与重启</h2><p>' +
+        (data.commands ? '选择当前的部署方式，在项目目录执行对应命令。' : '重启服务让新配置彻底生效；升级请下载新版整包覆盖当前文件夹。') +
+        '</p></div></div>' +
         (data.commands ? ((data.commands_cn ? '<label class="maintenance-cn-toggle"><input type="checkbox" id="cnMirrorToggle" onchange="WBReview.toggleCnSource()" /><span>国内网络环境（pip 走清华镜像，附基础镜像加速提示）</span></label>' : '') +
           '<div class="maintenance-tabs" role="group" aria-label="部署方式">' +
           ['docker','linux'].filter(name => data.commands[name]).map(name => '<button type="button" data-install-method="' + name +
@@ -130,7 +136,7 @@ window.WBReview = (() => {
             '<div data-cn-panel="default">' + commandBlock('maintenance-command-' + name, data.commands[name]) + '</div>' +
             (data.commands_cn && data.commands_cn[name] ? '<div data-cn-panel="cn" hidden>' + commandBlock('maintenance-command-cn-' + name, data.commands_cn[name]) + '</div>' : '') +
             '</div>').join('')) :
-          '<p class="maintenance-backup-help">获取正式版本后显示对应的升级命令，请稍后重新检查。</p>') +
+          '<div class="maintenance-backup-actions"><button class="console-btn primary" onclick="WBReview.doRestartService()"><i class="fa-solid fa-power-off" aria-hidden="true"></i>立即重启服务</button></div>') +
         '<p class="maintenance-deploy-note">先确认 <code>git status</code> 没有未处理的本地改动。NAS 可在容器管理器重新构建并重启，保留 <code>/data</code> 数据卷。</p></section>';
       selectInstall(data.commands?.[installMethod] ? installMethod : data.commands?.docker ? 'docker' : 'linux');
     } catch (error) { if (mine === updateGeneration) panel.textContent = error.message; }

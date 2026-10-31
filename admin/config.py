@@ -104,6 +104,14 @@ class Settings:
     #: 本地排障要看文档时设 `ADMIN_ENABLE_DOCS=1`。
     ENABLE_DOCS = os.getenv("ADMIN_ENABLE_DOCS", "0") == "1"
 
+    #: 是否在网页面板里检查 GitHub Releases 上的新版本。
+    #:
+    #: 默认**开启**（服务器 / 团队部署需要知道有没有新版）。本地自用可以设
+    #: `ADMIN_UPDATE_CHECK=0` 彻底关掉：届时「更新与备份」页不再等那次网络
+    #: 请求，直接渲染备份与重启面板，也不再有任何 GitHub API 调用。
+    #: 桌面版（EXE）默认按本机自用处理，在 desktop/app.py 里注入 0。
+    UPDATE_CHECK = os.getenv("ADMIN_UPDATE_CHECK", "1") != "0"
+
     # /v1/messages（Anthropic Messages API）的模型档次映射。
     # Claude Code 发的是 claude-opus-* / claude-sonnet-* / claude-haiku-* 这类名字，
     # 上游不认；这里按档次落到本后台白名单里的模型名。

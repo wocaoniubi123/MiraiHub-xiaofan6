@@ -67,4 +67,11 @@ def service():
 
 @router.get("/releases", dependencies=[Depends(require_admin)])
 def releases():
+    # 本地自用（ADMIN_UPDATE_CHECK=0）时直接返回空清单，不打 GitHub API。
+    # 否则每次打开版本弹窗都要等一次外网请求。
+    from admin.config import settings
+    if not settings.UPDATE_CHECK:
+        return {"version": VERSION, "platform": "windows", "releases": [], "latest": None,
+                "available": False, "error": "", "checked": False, "update_check": False,
+                "releases_url": RELEASES_URL}
     return service().check()

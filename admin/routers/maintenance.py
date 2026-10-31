@@ -29,7 +29,21 @@ router = APIRouter(prefix="/api/maintenance", tags=["maintenance"], dependencies
 
 @router.get("/update")
 def update_info():
+    """版本信息 + 备份/重启能力。``ADMIN_UPDATE_CHECK=0`` 时完全跳过网络。
+
+    桌面本地自用时每次进「更新与备份」都去打 GitHub API 没有意义：那次请求
+    慢的时候会把整页（含「下载 SQLite 备份」按钮）拖到它返回之后才渲染。
+    关掉后直接返回本地能力，页面立刻可用。
+    """
+    from admin.config import settings
     from packaging.version import Version, InvalidVersion
+    if not settings.UPDATE_CHECK:
+        return {"version": VERSION, "latest": None, "available": False,
+                "update_check": False, "error": "", "releases_url": RELEASES_URL,
+                "database": engine.dialect.name, "backup_supported": engine.dialect.name == "sqlite",
+                "commands": None, "commands_cn": None,
+                "backup_note": "备份含账号凭据和 API Key，请私密保存。",
+                "mysql_backup_command": "mysqldump --single-transaction --routines --triggers -h <数据库主机> -u <数据库用户> -p <数据库名> > workbuddy-backup.sql" if engine.dialect.name != "sqlite" else None}
     snapshot = service().check()
     candidates = []
     for release in snapshot.get("releases", []):

@@ -2136,8 +2136,8 @@
       </div>
     </section>
     <section id="panel-maintenance" class="hidden">
-      <div class="page-head"><div><h1>更新与备份</h1><p>检查正式版本、备份数据库，并按部署方式执行升级。</p></div><button class="console-btn" onclick="WBReview.loadUpdate()">检查更新</button></div>
-      <div id="maintenanceInfo" aria-live="polite">点击检查更新获取版本信息。</div>
+      <div class="page-head"><div><h1>更新与备份</h1><p>备份数据库、重启服务；需要时再手动检查版本。</p></div><button class="console-btn" onclick="WBReview.loadUpdate()">刷新</button></div>
+      <div id="maintenanceInfo" aria-live="polite">正在读取维护信息…</div>
     </section>
     <!-- 预警管理：把哨兵的封控信号推到邮件 / 飞书 / QQ 机器人。
          哨兵负责「发现」，这里负责「叫醒人」—— 没有这一步，连坐封号

@@ -18,10 +18,21 @@ from pathlib import Path
 
 import webbrowser
 
-from desktop.common import ROOT, VERSION, PortableDirUnwritable, atomic_json, data_dir
+from desktop.common import ROOT, RELEASES_URL, VERSION, PortableDirUnwritable, atomic_json, data_dir
 from desktop.runtime import configure_node, ensure_node, ensure_webview2
 from desktop.tray import TrayController, available as tray_available
 from desktop.updates import UpdateService
+
+
+def update_check_enabled() -> bool:
+    """是否检查 GitHub Releases 上的新版本。
+
+    必须在**调用时**读环境变量，不能在模块导入时定死：桌面入口的
+    `configure_environment()` 会注入 ``ADMIN_UPDATE_CHECK=0``（本地自用默认），
+    而它一定是模块导入之后才执行的。本地自用时连启动路径上那次网络请求
+    一起跳过，避免拖慢启动与网页面板。
+    """
+    return os.getenv("ADMIN_UPDATE_CHECK", "1") != "0"
 
 
 class _NullTray:
@@ -78,6 +89,9 @@ def configure_environment(base: Path) -> dict:
                        "ADMIN_JWT_SECRET": config["jwt_secret"], "PYTHONUTF8": "1",
                        "CONVERTER_API_KEY": config["converter_api_key"],
                        "CONVERTER_LOG": str(base / "logs/converter.log")})
+    # 桌面版默认按「本地自用」处理：不检查 GitHub Releases。
+    # 用户想恢复检查时，启动前设 ADMIN_UPDATE_CHECK=1 即可（环境变量优先）。
+    os.environ.setdefault("ADMIN_UPDATE_CHECK", "0")
     configure_portable_dirs(base)
     configure_node(base)
     os.chdir(base)
@@ -322,6 +336,14 @@ class DesktopAPI:
         return {"token": token}
 
     def check_updates(self):
+        # 本地自用（ADMIN_UPDATE_CHECK=0）时连桌面端也不再打 GitHub：
+        # 那个请求会在启动路径上阻塞，且对只在本机跑的人毫无意义。
+        if not update_check_enabled():
+            return {"version": VERSION, "platform": self.updates.platform, "releases": [],
+                    "latest": None, "available": False, "error": "", "checked": False,
+                    "releases_url": RELEASES_URL, "update_check": False,
+                    "runtime": self.runtime_message, "update": self.update_state,
+                    "startup_prompt_handled": self.tray_startup_update_check}
         result = self.updates.check()
         result.update(runtime=self.runtime_message, update=self.update_state,
                       startup_prompt_handled=self.tray_startup_update_check)
@@ -329,6 +351,8 @@ class DesktopAPI:
 
     def _check_tray_startup_update(self):
         """Tray launches check for updates while the backend starts in parallel."""
+        if not update_check_enabled():
+            return
         try:
             result = self.updates.check()
             latest = result.get("latest")
