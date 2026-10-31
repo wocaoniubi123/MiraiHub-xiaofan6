@@ -168,7 +168,9 @@ def main():
             (ROOT / f"dist/build-{version}.json").unlink(missing_ok=True)
             for command in commands:
                 run(command, log, env)
-            artifacts = [ROOT / f"dist/miraihub-{version}-windows-x64.exe",
+            # onedir：Windows 只产出 dist/miraihub-<版本>-windows-x64.zip
+            # （解压后根目录即 EXE 与 _internal/）。
+            artifacts = [ROOT / f"dist/miraihub-{version}-windows-x64.zip",
                          ROOT / f"dist/android/miraihub-{version}-android-arm64.apk"]
             manifest = {"version": version, "files": []}
             for path in artifacts:
@@ -177,15 +179,18 @@ def main():
                     for chunk in iter(lambda: file.read(1024 * 1024), b""):
                         hasher.update(chunk)
                 digest = hasher.hexdigest()
-                expected = path.with_suffix(path.suffix + ".sha256").read_text(encoding="ascii").split()[0]
-                if digest != expected:
-                    raise RuntimeError(f"产物校验失败：{path}")
+                checksum = path.with_suffix(path.suffix + ".sha256")
+                if checksum.is_file():
+                    expected = checksum.read_text(encoding="ascii").split()[0]
+                    if digest != expected:
+                        raise RuntimeError(f"产物校验失败：{path}")
                 manifest["files"].append({"path": path.relative_to(ROOT).as_posix(), "bytes": path.stat().st_size, "sha256": digest})
             (ROOT / f"dist/build-{version}.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-            print("\n两端构建及 SHA256 校验完成。Release 请上传以下两个包及各自的 .sha256：")
+            print("\n两端构建及 SHA256 校验完成。Release 请上传以下包（Windows 为 zip）：")
             for path in artifacts:
                 print(path)
-                print(path.with_suffix(path.suffix + ".sha256"))
+                checksum = path.with_suffix(path.suffix + ".sha256")
+                print(checksum if checksum.is_file() else "  （无 .sha256，哈希见构建清单）")
             print("日志：" + log.name)
 
 

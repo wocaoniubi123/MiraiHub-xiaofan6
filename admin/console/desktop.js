@@ -73,8 +73,10 @@ window.WBDesktop = (() => {
     const actions = element('div', undefined, 'wb-update-actions');
     actions.append(button('重新检查', () => check()), link('打开 Releases', 'https://github.com/xiaofan6ya/MiraiHub/releases'));
     const latest = releases?.latest;
-    if (!native && latest?.asset) {
-      actions.append(link(startupPrompt ? '立即更新' : window.WBMobile ? '下载最新版 APK' : '下载最新版 EXE', latest.asset.browser_download_url));
+    // Windows 是 onedir 目录版：不能只换单文件，统一引导到 Releases 下载 zip 覆盖。
+    if (latest?.asset && (!native || !latest.installable)) {
+      actions.append(link(window.WBMobile ? '下载最新版 APK' : '下载最新版 ZIP（解压覆盖当前目录）',
+        latest.asset.browser_download_url));
     }
     if (native && latest?.installable) {
       const download = button(startupPrompt ? '立即更新' : '下载最新版', async () => {
@@ -89,14 +91,18 @@ window.WBDesktop = (() => {
       }, true);
       actions.append(download);
     } else if (latest && !latest.installable) {
-      dialog.append(element('p', window.WBMobile ? '该版本尚未提供 Android APK 或校验文件，可在 Releases 查看。' : '该版本尚未提供 Windows EXE 或校验文件，可在 Releases 查看。', 'wb-update-meta'));
+      dialog.append(element('p', window.WBMobile
+        ? '该版本尚未提供 Android APK 或校验文件，可在 Releases 查看。'
+        : 'Windows 版为 onedir 目录包：下载 zip 后解压覆盖当前文件夹即可升级，config.json / workbuddy.db / logs 会保留。', 'wb-update-meta'));
     }
     dialog.append(actions);
     if (startupPrompt && latest) {
       const defer = element('div', undefined, 'wb-update-actions');
       defer.append(button('暂不更新', () => dialog.close()));
       dialog.append(defer);
-      dialog.append(element('p', native ? '立即更新将下载并校验安装包，然后重启客户端。' : '立即更新将打开安装包下载，安装由系统确认。', 'wb-update-meta'));
+      dialog.append(element('p', native
+        ? 'Windows 版为 onedir 目录包：请下载 zip 后解压覆盖当前文件夹，运行期数据会保留。'
+        : '立即更新将打开安装包下载，安装由系统确认。', 'wb-update-meta'));
     }
     const status = element('p', releases?.update?.message || '', 'wb-update-meta');
     status.id = 'wbUpdateStatus'; dialog.append(status);

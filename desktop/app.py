@@ -8,6 +8,7 @@ import secrets
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -17,7 +18,7 @@ from pathlib import Path
 
 import webbrowser
 
-from desktop.common import ROOT, VERSION, atomic_json, data_dir
+from desktop.common import ROOT, VERSION, PortableDirUnwritable, atomic_json, data_dir
 from desktop.runtime import configure_node, ensure_node, ensure_webview2
 from desktop.tray import TrayController, available as tray_available
 from desktop.updates import UpdateService
@@ -77,9 +78,31 @@ def configure_environment(base: Path) -> dict:
                        "ADMIN_JWT_SECRET": config["jwt_secret"], "PYTHONUTF8": "1",
                        "CONVERTER_API_KEY": config["converter_api_key"],
                        "CONVERTER_LOG": str(base / "logs/converter.log")})
+    configure_portable_dirs(base)
     configure_node(base)
     os.chdir(base)
     return config
+
+
+def configure_portable_dirs(base: Path) -> None:
+    """把默认落在系统临时目录 / _internal 里的产物拉回数据目录。
+
+    不注入的话这几处会漏到 EXE 之外：
+      · admin/media_service.py 的资产目录按 __file__ 算 → onedir 下是 _internal，
+        升级覆盖就没了；
+      · admin/routers/maintenance.py、admin/video_merge.py、admin/routers/releases.py
+        都走 tempfile，默认落 %TEMP%。
+    """
+    tmp = base / "tmp"
+    tmp.mkdir(parents=True, exist_ok=True)
+    (base / "agent_assets").mkdir(parents=True, exist_ok=True)
+    os.environ.update({
+        "WB_AGENT_ASSET_DIR": str(base / "agent_assets"),
+        "TMP": str(tmp),
+        "TEMP": str(tmp),
+    })
+    # gettempdir() 首次调用后会把结果缓存进 tempfile.tempdir，不重置则上面两行不生效。
+    tempfile.tempdir = None
 
 
 def setup_logging(base: Path):
@@ -345,8 +368,11 @@ class DesktopAPI:
             self.runtime_lock.release()
 
     def download_update(self, release_id):
+        # onedir 目录版：只能整包覆盖，程序内不再下载替换单个 EXE。
+        if self.updates.platform == "windows":
+            return {"error": "当前为 onedir 目录版，请到 Releases 下载 zip 后解压覆盖整个文件夹"}
         if not getattr(sys, "frozen", False):
-            return {"error": "源码模式请使用 Releases 中的 EXE"}
+            return {"error": "源码模式请使用 Releases 中的安装包"}
         if not self.update_lock.acquire(blocking=False):
             return {"error": "更新下载正在进行"}
         self.update_state = {"busy": True, "message": "正在下载更新…", "ready": False}
@@ -431,7 +457,7 @@ class DesktopAPI:
             deadline = time.monotonic() + 90
             while not self.closing.is_set() and time.monotonic() < deadline:
                 if self.process.poll() is not None:
-                    raise RuntimeError("本地服务启动失败，详细原因见用户目录 logs/backend.log")
+                    raise RuntimeError("本地服务启动失败，详细原因见 EXE 同目录 logs/backend.log")
                 try:
                     request = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/app/desktop-ready",
                                                       headers={"X-Desktop-Boot": nonce})
@@ -684,7 +710,17 @@ def run(tray_mode: bool = False):
         raise RuntimeError("桌面 EXE 支持 Windows 10/11 x64")
     import msvcrt
     import webview
-    base = data_dir()
+    try:
+        base = data_dir()
+    except PortableDirUnwritable as exc:
+        # 便携模式不回退：直接告诉用户换目录，而不是把数据写到别处。
+        ctypes.windll.user32.MessageBoxW(
+            None, f"{exc}\n\n请把程序放到有写入权限的文件夹（如桌面或 D 盘）后重新打开。",
+            "MiraiHub", 16)
+        return
+    except OSError as exc:
+        ctypes.windll.user32.MessageBoxW(None, f"无法创建数据目录：{exc}", "MiraiHub", 16)
+        return
     # Use a per-user lock rather than a PID file (stale PID files cannot block startup).
     lock = (base / "desktop.lock").open("a+b")
     lock.seek(0)

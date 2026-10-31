@@ -703,6 +703,11 @@ class _WorkBuddyInstall:
                 return expand_path(ov)
             except Exception:
                 pass
+        # 桌面版把数据根目录设在 EXE 旁（见 desktop.common.data_dir），
+        # 拆包产物跟着走，不再往 %LOCALAPPDATA% 下另开一个目录。
+        desktop_data = (os.getenv("WORKBUDDY_DESKTOP_DATA") or "").strip()
+        if desktop_data:
+            return Path(desktop_data) / "app_source"
         for ev in ("LOCALAPPDATA", "XDG_CACHE_HOME"):
             base = os.getenv(ev)
             if base:

@@ -35,7 +35,8 @@ class UpdateService:
         self.platform = platform or ("android" if METADATA["asset"].endswith(".apk") else "windows")
         if self.platform not in ("windows", "android"):
             raise ValueError("Unsupported update platform")
-        suffix = "android-arm64.apk" if self.platform == "android" else "windows-x64.exe"
+        # Windows 为 onedir 目录包，资产后缀是 .zip；Android 构建会把它改写成带版本号的 apk 名。
+        suffix = "android-arm64.apk" if self.platform == "android" else "windows-x64.zip"
         self.asset_pattern = "miraihub-{version}-" + suffix
         self.cache = base / f"releases-cache-{self.platform}.json"
         self.lock = threading.Lock()
@@ -83,12 +84,17 @@ class UpdateService:
                     asset = assets.get(filename)
                     checksum = assets.get(filename + ".sha256")
                     digest = (asset or {}).get("digest", "") or ""
+                    # onedir 是整目录产物：只替换 EXE 会造成 EXE 新 / _internal 旧，
+                    # 直接把 Windows 标记为不可安装，界面改为引导去 Releases 下载 zip 覆盖。
+                    installable = bool(asset and (checksum or digest.startswith("sha256:")))
+                    if self.platform == "windows":
+                        installable = False
                     releases.append({"id": row["id"], "tag": tag, "name": row.get("name") or tag,
                                      "body": (row.get("body") or "暂无更新说明")[:100000],
                                      "date": row.get("published_at", ""),
                                      "url": release_url(row["html_url"]), "asset": asset,
                                      "checksum": checksum,
-                                     "installable": bool(asset and (checksum or digest.startswith("sha256:")))})
+                                     "installable": installable})
                 self.releases = releases
                 atomic_json(self.cache, {"etag": self.etag, "releases": releases})
                 self.error = ""
@@ -104,6 +110,9 @@ class UpdateService:
 
     def stage(self, release_id: int, progress=None) -> Path:
         # A caller passes a release ID, never a URL or executable path.
+        if self.platform == "windows":
+            # onedir 无法只换 EXE：请下载 zip 覆盖整个文件夹。
+            raise ValueError("当前为 onedir 目录版，请到 Releases 下载 zip 后覆盖整个文件夹")
         release = next((r for r in self.releases if r["id"] == int(release_id)), None)
         if (self.platform != "windows" or not release or not newer(release["tag"])
                 or not self.matches_asset(release) or not release["installable"]):

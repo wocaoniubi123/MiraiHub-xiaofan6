@@ -79,6 +79,10 @@ a.binaries = [b for b in a.binaries
 print('  [size] 剔除 datas %d 项 / binaries %d 项' % (_d0 - len(a.datas), _b0 - len(a.binaries)))
 
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], name=name, debug=False,
+exe = EXE(pyz, a.scripts, [], name=name, debug=False,
           bootloader_ignore_signals=False, strip=False, upx=False, console=False,
           icon=str(root / 'desktop/assets/app.ico'), version=str(root / 'build/version-resource.txt'))
+# onedir：程序依赖放进同目录的 _internal/，启动时不再解包。
+# 好处：没有 _MEI* 临时目录，开机自启（工作目录常为 System32）不会把程序文件写进
+# 系统目录，启动也无需解压 35MB。数据目录由 desktop.common.data_dir 钉在 EXE 旁边。
+coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name=name)

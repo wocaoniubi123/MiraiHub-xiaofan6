@@ -27,5 +27,5 @@ jobs:
         with:
           name: wb2api-windows-x64
           path: |
-            dist/*.exe
-            dist/*.sha256
+            dist/*.zip
+            dist/*.zip.sha256

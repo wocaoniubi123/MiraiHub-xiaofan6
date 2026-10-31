@@ -1,4 +1,4 @@
-"""Reproducible Windows x64 onefile packaging; never includes .env, logs or account data."""
+"""Reproducible Windows x64 onedir packaging; never includes .env, logs or account data."""
 from __future__ import annotations
 
 import hashlib
@@ -6,8 +6,10 @@ import argparse
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -51,11 +53,25 @@ def main():
     subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
                     "--distpath", str(destination),
                     str(ROOT / "desktop/miraihub.spec")], cwd=ROOT, env=env, check=True)
-    executable = destination / f"miraihub-{version}-windows-x64.exe"
-    digest = hashlib.sha256(executable.read_bytes()).hexdigest()
-    executable.with_suffix(".exe.sha256").write_text(f"{digest}  {executable.name}\n", encoding="ascii")
-    print(f"Built {executable} ({executable.stat().st_size / 1048576:.1f} MB)")
-
+    # onedir：PyInstaller 产出 {dist}/{name}/{name}.exe + _internal/，不再生单个解包 EXE。
+    name = f"miraihub-{version}-windows-x64"
+    folder = destination / name
+    executable = folder / f"{name}.exe"
+    if not executable.is_file():
+        raise SystemExit(f"未生成预期的可执行文件：{executable}")
+    # 最终产物只留一个 zip：解开后根目录直接是 EXE 与 _internal/，不再套一层文件夹。
+    archive = destination / f"{name}.zip"
+    archive.unlink(missing_ok=True)
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
+        for path in sorted(folder.rglob("*")):
+            if path.is_file():
+                bundle.write(path, path.relative_to(folder).as_posix())
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    archive.with_suffix(".zip.sha256").write_text(f"{digest}  {archive.name}\n", encoding="ascii")
+    # PyInstaller 的 EXE 阶段会先往 dist 根写裸 EXE，COLLECT 再复制进文件夹，这里清掉中间产物。
+    shutil.rmtree(folder, ignore_errors=True)
+    (destination / f"{name}.exe").unlink(missing_ok=True)
+    print(f"Built {archive} ({archive.stat().st_size / 1048576:.1f} MB)")
 
 if __name__ == "__main__":
     main()

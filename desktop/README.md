@@ -2,9 +2,9 @@
 
 名称与路径中的 `***` 表示已脱敏，实际参数、文件名和存储位置以现有源码及配置为准；兼容参数保留原格式。
 
-支持 Windows 10（1809 及以后）/ Windows 11 x64。双击 `miraihub-版本-windows-x64.exe`，无需安装 Python、pip、MySQL 或 Redis，也无需填写后台用户名和密码。
+支持 Windows 10（1809 及以后）/ Windows 11 x64。解压 `miraihub-版本-windows-x64.zip` 后双击其中的 `miraihub-版本-windows-x64.exe`，无需安装 Python、pip、MySQL 或 Redis，也无需填写后台用户名和密码。
 
-Python 运行时、项目全部 Python 依赖、网页、字体及图标都内置在单文件 EXE 中。桌面版自动使用 SQLite（WAL 模式）与内存限流，默认监听 `0.0.0.0:8790`，支持本机与局域网访问。后续优先使用 `config.json` 保存的端口；只有该端口被占用时才选择空闲端口，并在服务成功启动后保存，重启继续复用。API Keys 页可选择并复制检测到的局域网地址；本地应用自动进入工作台，远程管理页仍需要登录。
+Python 运行时、项目全部 Python 依赖、网页、字体及图标都在同目录的 `_internal/` 里（onedir 打包，启动不解包）。桌面版自动使用 SQLite（WAL 模式）与内存限流，默认监听 `0.0.0.0:8790`，支持本机与局域网访问。后续优先使用 `config.json` 保存的端口；只有该端口被占用时才选择空闲端口，并在服务成功启动后保存，重启继续复用。API Keys 页可选择并复制检测到的局域网地址；本地应用自动进入工作台，远程管理页仍需要登录。
 
 Node.js 22.14.0 第一次在后台自动准备：依次尝试 npmmirror、华为云镜像、Node 官方源，并校验固定 SHA256；只保留 Node 执行器与许可证，无需 npm 或安装管理员权限。下载不阻塞窗口与后台使用，失败可在版本窗口重试。设备风控 SDK 仍来自用户已安装的 wb 客户端，项目不包含第三方账号或 SDK；使用网关需要添加自己的有效账号。
 
@@ -16,13 +16,16 @@ Node.js 22.14.0 第一次在后台自动准备：依次尝试 npmmirror、华为
 
 新版 wb 的 `.info` 文件使用 `$wbEncrypted` 加密敏感字段。扫描本机、文件上传和手动添加会在 Windows 上调用已安装 wb 的内置能力，在内存中解密后执行原有凭证校验；不修改客户端原文件、不弹出客户端窗口，也不在项目中携带密钥。入库后可从号池导出凭证，再导入手机或服务器。其它设备上的原始加密 `.info` 若没有匹配的客户端解密能力，会提示使用手机号/浏览器授权，不能把加密对象当作明文 token 使用。
 
-默认目录：`%LOCALAPPDATA%\***`，与 EXE 存放位置独立。
+默认目录：EXE 所在目录（便携模式，整个文件夹拷贝即可迁移）。EXE 放在无写权限的位置（如 `Program Files`、只读盘）时直接提示错误、不启动，数据不会写到别处。
 
 - `***.db`：账号、API Key、调度与用量数据，升级保留。
 - `config.json`：端口、随机本机鉴权信息、可选独立 `/gw/v1` 网关密钥 `converter_api_key`。桌面界面直接打开，不要求密码；后台接口仍有鉴权。
 - `runtime/`：缓存 Node，后续启动复用。
 - `logs/desktop.log`：轮转日志；`logs/backend.log`：本次后台启动日志；`logs/update.log`：升级记录。
 - `webview/`：本地 WebView2 缓存。
+- `agent_assets/`：内嵌智能体生成的图片与视频。
+- `tmp/`：运行期临时文件（备份、恢复、视频合并）、更新包暂存目录。
+- `_internal/`：程序自带的 Python 运行时、依赖与网页资源（onedir 打包，启动时不解包）。升级时整目录覆盖即可，其中的运行期文件不受影响。
 
 原部署 `.env`、数据库备份、账号 token、日志和本机虚拟环境不会进入 EXE。桌面模式不读取项目 `.env`，避免误连部署数据库。
 
@@ -30,13 +33,13 @@ Node.js 22.14.0 第一次在后台自动准备：依次尝试 npmmirror、华为
 
 每次打开窗口检查 [新仓库 Releases](https://github.com/xiaofan6ya/MiraiHub/releases)，发现新版本时弹出更新公告，可选择“稍后再说”或“暂不更新此版本”。跳过某版本不影响后续新版本提醒。左下角版本号或顶部更新按钮随时可查看公告并下载最新版。网络失败仍能使用已缓存的历史记录，不强制更新。
 
-点击“下载最新版”，校验后再点击“重启并安装更新”。下载失败、文件校验不通过或输出目录没有写入权限时保留旧版本。替换 EXE 前保存 `原文件名.exe.previous`；需要恢复时关闭客户端，将备份重命名为 `.exe`。更新只替换 EXE，不清除数据。无管理员权限使用时请把 EXE 放在有写权限的文件夹。
+点击“下载最新版 ZIP（解压覆盖当前目录）”到 Releases 取整包：Windows 为 onedir 目录版，关闭程序后解压新 zip 覆盖旧目录即可升级，`config.json`、`***.db`、`logs/`、`runtime/`、`webview/` 等运行期文件保留。程序内不再直接替换 EXE —— 只换 EXE 会造成 EXE 新 / `_internal` 旧而版本错配。
 
 自动更新资产约定（大小写一致）：
 
-文件后缀为 `-windows-x64.exe` 与 `.exe.sha256`，完整前缀以现有构建代码为准。
+文件后缀为 `-windows-x64.zip` 与 `.zip.sha256`，完整前缀以现有构建代码为准。
 
-也支持 GitHub 返回的 `sha256:` asset digest。Release 没有 Windows EXE 或校验信息时仅展示说明和链接。草稿与预发布不会触发自动升级。Release 正文按纯文本展示，不执行其中 HTML。
+也支持 GitHub 返回的 `sha256:` asset digest。Release 没有 Windows ZIP 或校验信息时仅展示说明和链接。草稿与预发布不会触发自动升级。Release 正文按纯文本展示，不执行其中 HTML。
 
 ## 开发与发布
 
@@ -49,14 +52,14 @@ python -m venv .desktop-build
 .\.desktop-build\Scripts\python.exe scripts/build_desktop.py
 ```
 
-输出 EXE 与 SHA256 到 `dist/`；若旧 EXE 正在运行，可用 `--dist-dir dist/final` 构建到不同目录。依赖使用锁定版本，可重现当前构建；`requirements-desktop.txt` 用于更新依赖后重新生成锁文件。
+输出 zip 与 SHA256 到 `dist/`；若旧程序正在运行，可用 `--dist-dir dist/final` 构建到不同目录。依赖使用锁定版本，可重现当前构建；`requirements-desktop.txt` 用于更新依赖后重新生成锁文件。
 
 版本唯一来源：`desktop/version.json`，图标源：`desktop/assets/app.svg`。构建脚本由 SVG 生成七种尺寸 ICO，写入 EXE 图标及文件版本信息，不携带 SVG 转换工具。
 
-`.github/workflows/desktop-release.yml` 仅支持手动构建 Windows 产物。正式发布需先部署验证，再构建 EXE/APK 并完成产物冒烟，随后写公告、提交源码并推送裸版本标签（例如 `1.14.0`），最后上传两个包及各自的 SHA256。1.13.0 及更早版本需手动安装新版一次。
+`.github/workflows/desktop-release.yml` 仅支持手动构建 Windows 产物。正式发布需先部署验证，再构建 zip/APK 并完成产物冒烟，随后写公告、提交源码并推送裸版本标签（例如 `1.14.0`），最后上传两个包及各自的 SHA256。1.13.0 及更早版本需手动安装新版一次。
 
 可验证真实 PyWebView 窗口、自动进入后台与版本入口，执行后自动退出：
 
-使用隔离空数据目录（环境参数按 `desktop/common.py` 设置），对实际生成的 EXE 执行 `--smoke-test` 并指定结果 JSON 路径。
+使用隔离空数据目录（环境参数按 `desktop/common.py` 设置），对实际生成的程序执行 `--smoke-test` 并指定结果 JSON 路径。注意 Windows 版本是便携模式，直接运行会往程序目录写数据，冒烟请用 `WORKBUDDY_DESKTOP_DATA` 指向临时空目录。
 
 隔离测试参数不需要普通用户配置。
