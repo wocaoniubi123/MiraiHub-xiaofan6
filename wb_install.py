@@ -266,11 +266,11 @@ def _iter_drive_roots(drives: str):
 #:
 #: 为什么需要二级：用户常把客户端装在带一层分类目录的位置，例如
 #: `E:\AI\WorkBuddy`、`D:\Programs\WorkBuddy`。只拼盘根（`E:\WorkBuddy`）
-#: 会漏掉这类真实存在且很常见的布局 —— 表现为「明明装了客户端，却一直
-#: 报未发现安装目录，设备令牌抓不到、UA 版本退化成兜底值」。
+#: 会漏掉这类真实存在且很常见的布局 —— 表现为「明明装了客户端，却一直报
+#: 未发现安装目录」：设备风控令牌抓不到、出站 UA 的版本退化成兜底值。
 #:
-#: 成本：每盘一级子目录约 10~15 个，每个只做一次 `resources/app.asar`
-#: 的 is_file 探测（无递归），实测 5 个盘合计 60 余个候选、耗时几毫秒。
+#: 成本：每盘一级子目录约 10~15 个，每个只做一次 `resources/app.asar` 的
+#: is_file 探测（无递归）。实测 5 个盘合计 36 → 70 个候选、冷扫描 12ms。
 #: 这里再设一个上限，防止个别盘根被塞进上百个目录时把扫描拖慢。
 _MAX_SUBDIR_BASES = 40
 
@@ -565,7 +565,7 @@ class _WorkBuddyInstall:
             for name in _BASE_NAMES:
                 out.append(root / name)
             # 3b) 盘根下一层子目录：覆盖 E:\AI\WorkBuddy 这类带分类目录的安装位置。
-            #     只做一层，不递归；顺序在盘根候选之后，命中盘根时不会白扫。
+            #     只做一层、不递归；排在盘根候选之后，命中盘根时不会白扫。
             for parent in _iter_subdir_bases(root):
                 for name in _BASE_NAMES:
                     out.append(parent / name)

@@ -395,6 +395,9 @@ class DesktopAPI:
         self.tray_startup_update_check = False
         self.updates = UpdateService(base)
         self.closing = threading.Event()
+        # 「真正退出」标志：区别于「关窗口收进托盘」。
+        # 关窗处理器靠它决定是 hide 还是放行（见 on_window_closing）。
+        self._quitting = False
         self.start_lock = threading.Lock()
         self.runtime_lock = threading.Lock()
         self.update_lock = threading.Lock()
@@ -667,6 +670,34 @@ class DesktopAPI:
         import webview
         return window is not None and window in webview.windows
 
+    def on_window_closing(self):
+        """托盘模式下点窗口的 × —— **收进托盘**，不停服务、不退出进程。
+
+        为什么需要它：托盘模式现在双击就弹窗（原来是隐藏宿主窗口），
+        而 pywebview 默认「关掉最后一个窗口 → GUI 循环结束 → 进程退出」。
+        不拦这一下，用户点 × 就会把服务和托盘一起带走，
+        和「关窗口只是收起来、从托盘还能唤回」的预期相反。
+
+        **退出流程必须放行**：托盘菜单的「退出」会走 `quit()` → `destroy()`，
+        而 `destroy()` 同样触发本回调。以前这里无条件 `hide()` + 返回 False，
+        于是那个 destroy 被自己拦掉 —— 窗口只是隐藏、进程继续活着，
+        用户点了「退出」只看到「已收进托盘」，软件根本关不掉（线上实测反馈）。
+        现在只要进入了退出流程（`_quitting` / `closing`），直接放行。
+
+        返回 False 拦下关闭；返回 True 允许关闭。
+        """
+        if self._quitting or self.closing.is_set():
+            return True
+        try:
+            if self.window is not None:
+                self.window.hide()
+            if self.tray is not None:
+                self.tray.notify("MiraiHub 已收进托盘，双击图标可重新打开")
+        except Exception:
+            logging.debug("隐藏窗口失败，改用默认关闭行为", exc_info=True)
+            return True          # 隐藏失败就让它正常关，别把用户挡在窗口里
+        return False
+
     def open_window(self):
         """Show the embedded console window, creating it on demand.
 
@@ -784,8 +815,27 @@ class DesktopAPI:
             self.start()
 
     def quit(self):
-        """Exit the application entirely (tray → 退出)."""
+        """Exit the application entirely (tray → 退出).
+
+        退出必须**真的把进程带走**。之前这里只 `destroy()` 窗口，
+        而窗口的 closing 回调会把它拦下来（hide + 「已收进托盘」提示），
+        结果是「点了退出，界面消失、进程和托盘都还在，再也退不掉」——
+        用户原话：「我都退出了你收个屁托盘」。三处一起修：
+
+          1. 先立 `_quitting` 旗标，让 closing 回调放行（不再 hide）；
+          2. **显式停托盘**：pystray 自带消息循环跑在独立线程里，不停它
+             进程会一直驻留，这也是「退不掉」的另一半原因；
+          3. 兜底强杀：GUI 循环若因 WebView2 偶发不返回，3 秒后 `os._exit(0)`。
+             后端已经在 `stop()` 里拆干净了（含 taskkill /T），
+             少一次「体面收尾」远好过让用户遇到一个关不掉的软件。
+        """
+        self._quitting = True
         self.stop()
+        try:
+            if self.tray is not None:
+                self.tray.stop()
+        except Exception:
+            logging.exception("停止托盘图标失败")
         try:
             import webview
             for window in list(webview.windows):  # emptying the registry ends the loop
@@ -795,6 +845,13 @@ class DesktopAPI:
                     logging.exception("Failed to destroy window during quit")
         except Exception:
             logging.exception("Quit failed")
+
+        def _force_exit():
+            time.sleep(3)
+            logging.getLogger("desktop").warning("GUI 循环未退出，强制结束进程")
+            os._exit(0)
+
+        threading.Thread(target=_force_exit, name="quit-force", daemon=True).start()
         return {"ok": True}
 
     def _smoke_test(self):
@@ -944,10 +1001,23 @@ def run(tray_mode: bool = False):
         api = DesktopAPI(base, config)
         webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
 
+        # 启动阶段诊断：windowed EXE 没有控制台，窗口不出时无从下手。
+        # 每一步落到 <data>/logs/desktop-boot.log，事后能一眼看出停在哪。
+        def _boot(mark: str) -> None:
+            try:
+                (base / "logs").mkdir(parents=True, exist_ok=True)
+                with (base / "logs" / "desktop-boot.log").open("a", encoding="utf-8") as fh:
+                    fh.write("%s %s\n" % (time.strftime("%H:%M:%S"), mark))
+            except Exception:
+                pass
+
+        _boot("run():tray_mode=%s" % tray_mode)
         if tray_mode:
             tray = TrayController(api, ROOT, VERSION)
             api.tray = tray
-            if not tray.start():
+            started = tray.start()
+            _boot("tray.start()=%s" % started)
+            if not started:
                 ctypes.windll.user32.MessageBoxW(
                     None, "托盘组件不可用，将以窗口模式启动。\n\n数据和日志：" + str(base),
                     "MiraiHub", 48)
@@ -960,32 +1030,63 @@ def run(tray_mode: bool = False):
                                           background_color="#f5f6f8", text_select=True, frameless=True, easy_drag=False)
             api.window = window
             window.events.closed += api.stop
+            _boot("window created (window mode)")
             webview.start(lambda: (api.retry_runtime(), api.retry_start()), gui="edgechromium",
                           private_mode=False, storage_path=str(base / "webview"),
                           icon=str(ROOT / "desktop/assets/app.ico"))
+            _boot("webview.start() returned (window mode)")
             return
 
-        # Tray mode: no window. The backend starts automatically so API clients can
-        # connect right after a double-click; stop/restart stay on the tray menu.
-        # pywebview's GUI loop exits once every window is gone, so an invisible
-        # 1x1 host window keeps the process resident between console sessions.
+        # Tray mode: 双击 EXE 就**自动起服务并直接显示主窗口**，
+        # 托盘继续驻留以便关闭窗口后还能唤回。
+        #
+        # 改之前是「只放托盘图标，服务和窗口都要右键菜单点」—— 用户双击后
+        # 桌面什么都没有，以为没启动，只能去托盘里翻（这是实测反馈）。
+        # 现在：托盘是**兜底**，不是入口。
+        #
+        # pywebview 的 GUI 循环在没有窗口时会退出，所以仍然需要一个宿主窗口；
+        # 但托盘模式下它同时就是主窗口（不再是 1x1 隐藏窗口）。
         threading.Thread(target=api._state_monitor, name="tray-state", daemon=True).start()
-        webview.create_window("__tray_host__", html="<!doctype html><title></title>",
-                              width=1, height=1, frameless=True, hidden=True)
-        tray.notify("MiraiHub 已在托盘运行，正在启动本地服务…")
+        tray.notify("MiraiHub 已启动，正在打开界面…")
         api.tray_startup_update_check = True
+
+        # 主窗口在托盘模式下也要能打开 —— 和窗口模式同一个 SPLASH 页面，
+        # 由 Bridge 驱动启动进度。
+        window = webview.create_window(
+            f"MiraiHub · v{VERSION}", html=SPLASH, js_api=Bridge(api),
+            width=1280, height=860, min_size=(900, 600),
+            background_color="#f5f6f8", text_select=True, frameless=True,
+            easy_drag=False)
+        api.window = window
+        # 关闭窗口 = 收进托盘（不停服务）。真正退出走托盘菜单的「退出」。
+        window.events.closing += api.on_window_closing
+        _boot("window created (tray mode)")
+
         def start_tray_shell():
-            # 双击启动即拉起本地服务（含 /v1 网关），否则 API 客户端连不上；
-            # Node 运行时与更新检查并行进行，不阻塞服务启动。
-            api.start()
+            # 先起服务，再显示窗口：服务没起来时页面会自己显示重试按钮，
+            # 比先亮窗口再转圈更清楚。
+            _boot("start_tray_shell entered")
             api.retry_runtime()
+            api.retry_start()
             threading.Thread(target=api._check_tray_startup_update,
                              name="startup-update", daemon=True).start()
+
         webview.start(start_tray_shell, gui="edgechromium",
                       private_mode=False, storage_path=str(base / "webview"),
                       icon=str(ROOT / "desktop/assets/app.ico"))
     except Exception as exc:
         logging.exception("Desktop failed")
+        # windowed EXE 没有控制台，MessageBox 又可能在无人值守时被忽略；
+        # 把完整堆栈落到数据目录，事后能查（这条救过好几次打包问题）。
+        try:
+            import traceback
+            (base / "logs").mkdir(parents=True, exist_ok=True)
+            with (base / "logs" / "desktop-crash.log").open("a", encoding="utf-8") as fh:
+                fh.write("=" * 60 + "\n")
+                fh.write(str(exc) + "\n")
+                fh.write(traceback.format_exc() + "\n")
+        except Exception:
+            pass
         ctypes.windll.user32.MessageBoxW(None, str(exc) + f"\n\n数据和日志：{base}", "MiraiHub", 16)
     finally:
         if api:
