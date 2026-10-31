@@ -169,7 +169,7 @@ def main():
             for command in commands:
                 run(command, log, env)
             # onedir：Windows 只产出 dist/miraihub-<版本>-windows-x64.zip
-            # （解压后根目录即 EXE 与 _internal/）。
+            # （解压后根目录即 miraihub-windows-x64.exe 与 _internal/）。
             artifacts = [ROOT / f"dist/miraihub-{version}-windows-x64.zip",
                          ROOT / f"dist/android/miraihub-{version}-android-arm64.apk"]
             manifest = {"version": version, "files": []}
@@ -179,6 +179,7 @@ def main():
                     for chunk in iter(lambda: file.read(1024 * 1024), b""):
                         hasher.update(chunk)
                 digest = hasher.hexdigest()
+                # Windows zip 不再额外产出 .sha256；Android APK 仍保留校验文件。
                 checksum = path.with_suffix(path.suffix + ".sha256")
                 if checksum.is_file():
                     expected = checksum.read_text(encoding="ascii").split()[0]
@@ -186,11 +187,9 @@ def main():
                         raise RuntimeError(f"产物校验失败：{path}")
                 manifest["files"].append({"path": path.relative_to(ROOT).as_posix(), "bytes": path.stat().st_size, "sha256": digest})
             (ROOT / f"dist/build-{version}.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-            print("\n两端构建及 SHA256 校验完成。Release 请上传以下包（Windows 为 zip）：")
+            print("\n两端构建完成，SHA256 已写入构建清单（Windows 不额外产出 .sha256 文件）：")
             for path in artifacts:
                 print(path)
-                checksum = path.with_suffix(path.suffix + ".sha256")
-                print(checksum if checksum.is_file() else "  （无 .sha256，哈希见构建清单）")
             print("日志：" + log.name)
 
 

@@ -53,25 +53,27 @@ def main():
     subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
                     "--distpath", str(destination),
                     str(ROOT / "desktop/miraihub.spec")], cwd=ROOT, env=env, check=True)
-    # onedir：PyInstaller 产出 {dist}/{name}/{name}.exe + _internal/，不再生单个解包 EXE。
-    name = f"miraihub-{version}-windows-x64"
-    folder = destination / name
-    executable = folder / f"{name}.exe"
+    # onedir：PyInstaller 产出 {dist}/{spec_name}/{spec_name}.exe + _internal/。
+    # spec 里的 name 不带版本号（引导器与版本无关），版本号只体现在外层 zip 名上。
+    spec_name = "miraihub-windows-x64"
+    folder = destination / spec_name
+    executable = folder / f"{spec_name}.exe"
     if not executable.is_file():
         raise SystemExit(f"未生成预期的可执行文件：{executable}")
     # 最终产物只留一个 zip：解开后根目录直接是 EXE 与 _internal/，不再套一层文件夹。
-    archive = destination / f"{name}.zip"
+    archive = destination / f"miraihub-{version}-windows-x64.zip"
     archive.unlink(missing_ok=True)
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
         for path in sorted(folder.rglob("*")):
             if path.is_file():
                 bundle.write(path, path.relative_to(folder).as_posix())
+    # 不产出 .sha256 文件：哈希打印到构建输出，并写入 dist/build-<版本>.json 清单。
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    archive.with_suffix(".zip.sha256").write_text(f"{digest}  {archive.name}\n", encoding="ascii")
     # PyInstaller 的 EXE 阶段会先往 dist 根写裸 EXE，COLLECT 再复制进文件夹，这里清掉中间产物。
     shutil.rmtree(folder, ignore_errors=True)
-    (destination / f"{name}.exe").unlink(missing_ok=True)
+    (destination / f"{spec_name}.exe").unlink(missing_ok=True)
     print(f"Built {archive} ({archive.stat().st_size / 1048576:.1f} MB)")
+    print(f"SHA256 {digest}")
 
 if __name__ == "__main__":
     main()

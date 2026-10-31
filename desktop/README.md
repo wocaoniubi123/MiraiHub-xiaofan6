@@ -2,7 +2,7 @@
 
 名称与路径中的 `***` 表示已脱敏，实际参数、文件名和存储位置以现有源码及配置为准；兼容参数保留原格式。
 
-支持 Windows 10（1809 及以后）/ Windows 11 x64。解压 `miraihub-版本-windows-x64.zip` 后双击其中的 `miraihub-版本-windows-x64.exe`，无需安装 Python、pip、MySQL 或 Redis，也无需填写后台用户名和密码。
+支持 Windows 10（1809 及以后）/ Windows 11 x64。解压 `miraihub-版本-windows-x64.zip` 后双击其中的 `miraihub-windows-x64.exe`，无需安装 Python、pip、MySQL 或 Redis，也无需填写后台用户名和密码。
 
 Python 运行时、项目全部 Python 依赖、网页、字体及图标都在同目录的 `_internal/` 里（onedir 打包，启动不解包）。桌面版自动使用 SQLite（WAL 模式）与内存限流，默认监听 `0.0.0.0:8790`，支持本机与局域网访问。后续优先使用 `config.json` 保存的端口；只有该端口被占用时才选择空闲端口，并在服务成功启动后保存，重启继续复用。API Keys 页可选择并复制检测到的局域网地址；本地应用自动进入工作台，远程管理页仍需要登录。
 
@@ -37,7 +37,7 @@ Node.js 22.14.0 第一次在后台自动准备：依次尝试 npmmirror、华为
 
 自动更新资产约定（大小写一致）：
 
-文件后缀为 `-windows-x64.zip` 与 `.zip.sha256`，完整前缀以现有构建代码为准。
+文件后缀为 `-windows-x64.zip`，zip 内的可执行文件固定叫 `miraihub-windows-x64.exe`（不带版本号），完整前缀以现有构建代码为准。Windows 包不单独提供 `.zip.sha256` 资产。
 
 也支持 GitHub 返回的 `sha256:` asset digest。Release 没有 Windows ZIP 或校验信息时仅展示说明和链接。草稿与预发布不会触发自动升级。Release 正文按纯文本展示，不执行其中 HTML。
 

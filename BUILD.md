@@ -21,7 +21,7 @@
 
 ## 产物
 
-- Windows：`dist/` 下的 `*-windows-x64.zip` 与对应 `.zip.sha256`。zip 解开后根目录直接是 `*-windows-x64.exe` 与 `_internal/`，不再套一层文件夹。
+- Windows：`dist/` 下的 `miraihub-<版本>-windows-x64.zip`。zip 解开后根目录直接是 `miraihub-windows-x64.exe`（不带版本号）与 `_internal/`，不再套一层文件夹。Windows 不额外产出 `.sha256` 文件，哈希打印在构建输出并写入 `dist/build-<版本>.json`。
 - Android：`dist/android/` 下的 `*-android-arm64.apk` 与对应 `.apk.sha256`。
 - 完整日志：`build/package-logs/`；两端成功后生成 `dist/build-版本号.json`。
 
@@ -41,17 +41,17 @@ Android 签名保存在 `build/android-signing/`。迁移构建机时备份并�
 
 ```powershell
 Get-ChildItem dist\*-windows-x64.zip | Get-FileHash -Algorithm SHA256
-Get-ChildItem dist\*.zip.sha256 | Get-Content
+Get-Content dist\build-*.json
 Get-ChildItem dist\android\*-android-arm64.apk | Get-FileHash -Algorithm SHA256
 Get-ChildItem dist\android\*.apk.sha256 | Get-Content
 ```
 
-逐一对照摘要与构建清单。实际程序还需在隔离空数据目录运行 `--smoke-test`，确认窗口、自动进入工作台、版本角标及结果 `ok: true`。隔离数据目录参数按当前源码设置，不使用本文中的脱敏占位符。
+Windows 的摘要以 `dist/build-<版本>.json` 清单里的 `sha256` 为准（不额外产出 `.sha256` 文件），Android 仍对照 `.apk.sha256`。逐一核对后再做产物冒烟。实际程序还需在隔离空数据目录运行 `--smoke-test`，确认窗口、自动进入工作台、版本角标及结果 `ok: true`。隔离数据目录参数按当前源码设置，不使用本文中的脱敏占位符。
 
 便携模式还需确认运行期产物全部落在 EXE 目录：解压 zip 到可写目录后启动，检查 `config.json`、`workbuddy.db`、`logs\`、`runtime\`、`webview\`、`agent_assets\`、`tmp\` 均已生成于同目录，且 `%TEMP%` 下没有新增 `_MEI*`。
 
 ## 发布
 
-版本与仓库信息由 desktop/version.json 提供。按部署验证、双端构建与产物验证、公告、提交与标签、正式 Release 的顺序完成发布。正式 Release 应包含 Windows zip、APK 及各自的 SHA256 文件；Windows 和 Android 必须分别匹配正确平台包。
+版本与仓库信息由 desktop/version.json 提供。按部署验证、双端构建与产物验证、公告、提交与标签、正式 Release 的顺序完成发布。正式 Release 应包含 Windows zip、APK 及 APK 的 SHA256 文件；Windows zip 的摘要写在 Release 正文或构建清单里，不单独上传校验文件。Windows 和 Android 必须分别匹配正确平台包。
 
 公开公告位于 `docs/RELEASE_NOTES_版本号.md`。不要发布内部分析、协议研究、取证资料、私有配置、凭据、签名或构建日志。公开范围见 [迁移约定](docs/PUBLICATION.md)。

@@ -1,11 +1,11 @@
 # Run through scripts/build_desktop.py; only explicitly listed product assets are included.
 from pathlib import Path
-import json
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 root = Path(SPECPATH).parent
-version = json.loads((root / 'desktop/version.json').read_text(encoding='utf-8'))['version']
-name = f'miraihub-{version}-windows-x64'
+# EXE 名不带版本号：onedir 产物的 EXE 只是引导器，版本随 _internal 一起被整包覆盖。
+# 版本号只体现在外层 zip 名与 EXE 的文件版本资源上（见 scripts/build_desktop.py）。
+name = 'miraihub-windows-x64'
 datas = [(str(root / 'admin/static'), 'admin/static'),
          # The authenticated management console lives outside the public
          # static directory and must be present in the desktop bundle too.

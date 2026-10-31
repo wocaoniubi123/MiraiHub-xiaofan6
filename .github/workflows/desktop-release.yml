@@ -25,7 +25,7 @@ jobs:
       - run: python scripts/build_desktop.py
       - uses: actions/upload-artifact@v4
         with:
-          name: wb2api-windows-x64
+          name: miraihub-windows-x64
           path: |
             dist/*.zip
-            dist/*.zip.sha256
+            dist/build-*.json

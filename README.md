@@ -172,7 +172,7 @@ python admin/platform/skill/scripts/verify_platform.py  # 接入后验收
 ### 方式一：桌面版（最省事）
 
 从 [Releases](https://github.com/xiaofan6ya/MiraiHub/releases) 下载
-`miraihub-<version>-windows-x64.zip`，解压到有写入权限的文件夹后双击其中的 `miraihub-<version>-windows-x64.exe`。
+`miraihub-<version>-windows-x64.zip`，解压到有写入权限的文件夹后双击其中的 `miraihub-windows-x64.exe`。
 
 首次启动会在 EXE 同目录创建数据目录、生成管理员密码，并打开工作台。Windows 版为便携模式：配置、数据库、日志、Node 运行时、WebView2 缓存与临时文件都落在 EXE 所在目录，整个文件夹拷贝即可迁移。
 
