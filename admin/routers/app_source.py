@@ -35,6 +35,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -195,8 +196,25 @@ def locate(body: LocateIn, _: bool = Depends(require_admin),
         wb_paths.save(paths, db)
         WB.refresh()
         out["saved"] = paths
+        # 换安装目录 = 换了 SDK 所在位置：先前的失败结果（负缓存 300 秒）
+        # 或过期的成功缓存都不再有效，必须立刻重取，否则面板还要红几分钟
+        # 才自己恢复 —— 用户会以为「保存了也没用」。
+        _reset_device_token()
     out.update(_status_payload())
     return out
+
+
+def _reset_device_token() -> None:
+    """清掉设备令牌缓存并在后台重取；失败不影响主流程。"""
+    def _run() -> None:
+        try:
+            from admin.turing_token import clear_cache, warmup
+            clear_cache()
+            warmup()
+        except Exception:
+            _logger.debug("切换安装目录后重置设备令牌失败", exc_info=True)
+
+    threading.Thread(target=_run, daemon=True, name="wb-turing-reset").start()
 
 
 @router.post("/reset-paths")

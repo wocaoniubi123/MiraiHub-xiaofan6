@@ -2,6 +2,7 @@
 import hashlib
 import logging
 import os
+import time
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
@@ -281,6 +282,52 @@ app.include_router(releases.router)
 app.include_router(login_router.public_router)
 
 
+def _schedule_device_token_warmup() -> None:
+    """在后台线程里**持续**预热设备风控令牌。
+
+    两件事必须都做到，否则面板会莫名变红：
+
+    1. **等私有 Node 就绪再预热**。桌面模式的 Node 运行时是后台下载的
+       （见 desktop/runtime.ensure_node），启动瞬间可能还没有 node.exe。
+    2. **周期性重复预热**。turing_token 的 `_CACHE_TTL` 只有 600 秒，
+       成功结果 10 分钟就过期；`status()` 只读缓存不触发真实调用，
+       所以「启动时预热一次」之后过 10 分钟面板必然显示不可用，
+       而 `cached_failure` 仍是 false（不是失败，是成功缓存过期了）。
+       这里每 `_CACHE_TTL/3`（200 秒）刷新一次，留足余量。
+
+    非桌面模式（服务器部署）没有桌面客户端，预热只会填负缓存让后续请求
+    快速失败，同样需要重复——否则每 5 分钟就要重新等一次 node 子进程。
+    """
+    import threading
+
+    def _worker() -> None:
+        try:
+            from admin.turing_token import warmup, _node_bin, _CACHE_TTL
+        except Exception:
+            logger.exception("设备令牌预热模块加载失败")
+            return
+        interval = max(60, int(_CACHE_TTL / 3))
+        # 先等 Node 就绪（最多 10 分钟），就绪后转入周期刷新。
+        for _ in range(600):
+            try:
+                if _node_bin():
+                    break
+            except Exception:
+                logger.debug("设备令牌预热探测失败，稍后重试", exc_info=True)
+            time.sleep(1)
+        else:
+            logger.warning("设备令牌预热：等不到 Node 运行时，放弃周期刷新")
+            return
+        while True:
+            try:
+                warmup()
+            except Exception:
+                logger.debug("设备令牌周期预热失败，下轮重试", exc_info=True)
+            time.sleep(interval)
+
+    threading.Thread(target=_worker, daemon=True, name="wb-turing-warmup-sched").start()
+
+
 @app.on_event("startup")
 def _startup():
     # 启动手机号登录会话的**定时回收**线程。
@@ -348,6 +395,16 @@ def _startup():
                 logger.info("已应用后台路径设置：%s", ov)
         except Exception:
             logger.exception("应用后台路径设置失败（继续用自动扫描）")
+
+    # 设备令牌预热必须在 wb_paths 注入之后做。
+    #
+    # get_device_token() 会把自己的 WB.install_dir() 作为 WORKBUDDY_INSTALL_DIR
+    # 下发给 turing_helper.js。预热若放在路径注入之前（或与之并发、无先后保证），
+    # 注入还没跑完时 install_dir 仍是 None（自动扫描只认盘根下的 WorkBuddy，
+    # 找不到装在 E:\AI\WorkBuddy 这类自定义子目录里的），helper 失败后写入
+    # _FAIL_TTL=300 的负缓存 —— 面板就一直显示「原生 SDK 令牌不可用」，
+    # 即使后台保存的安装目录完全正确、手动跑 helper 也能拿到令牌。
+    _schedule_device_token_warmup()
 
     # 打印客户端版本发现结果：出站 UA 与桌面事件指纹都靠它。
     # 显示「兜底」就说明没找到本机安装包 —— 服务能跑，但 UA 报的版本

@@ -162,16 +162,9 @@ def backend(port: int):
     from admin.db import init_db
     if not init_db():
         raise RuntimeError("本地数据库初始化失败")
-    def runtime_watch():
-        from desktop.runtime import node_dir
-        for _ in range(600):
-            if (node_dir(base) / "node.exe").is_file():
-                from admin.turing_token import clear_cache, warmup
-                clear_cache()
-                warmup()
-                return
-            time.sleep(1)
-    threading.Thread(target=runtime_watch, daemon=True).start()
+    # 设备令牌预热交给 admin/server.py 的 startup：那里已经跑完 wb_paths 注入，
+    # 能拿到正确的安装目录。原先在这里开线程预热会与注入竞争，先跑就会把
+    # 错误结果写进 5 分钟负缓存（面板一直显示「原生 SDK 令牌不可用」）。
     uvicorn.run(app, host="0.0.0.0", port=port, log_config=None, access_log=False,
                 loop="asyncio", http="h11", ws="none", proxy_headers=False, timeout_graceful_shutdown=5)
 
