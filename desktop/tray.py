@@ -241,6 +241,11 @@ class TrayController:
         try:
             self.icon.icon = compose(self._base_image, state)
             self.icon.title = self._title()
+            # 启动/停止/重启三项的 enabled 都是 lambda（读 self.state），但 win32 后端的
+            # 菜单是一次性构建的 HMENU：MFS_DISABLED 在建菜单时就定死了，只有 update_menu()
+            # 才会销毁重建。不主动刷新的话，服务已启动、菜单却仍显示「启动服务」可用、
+            # 「停止/重启」变灰，直到用户点开一次控制台触发重绘 —— 看起来像状态判断错了。
+            self.icon.update_menu()
         except Exception:
             logger.debug("Tray icon refresh failed", exc_info=True)
 

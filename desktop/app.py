@@ -319,7 +319,7 @@ class DesktopAPI:
         return result
 
     def _check_tray_startup_update(self):
-        """A tray-only launch checks too, without starting the API service."""
+        """Tray launches check for updates while the backend starts in parallel."""
         try:
             result = self.updates.check()
             latest = result.get("latest")
@@ -703,8 +703,9 @@ class DesktopAPI:
 def run(tray_mode: bool = False):
     """桌面向前端入口。
 
-    tray_mode: 双击 EXE 或开机自启时的默认路径 —— 只放托盘图标，不起服务、不开窗口，
-    由用户在右键菜单里决定何时启动。窗口模式（不开托盘）保持旧行为以兼容 --smoke-test。
+    tray_mode: 双击 EXE 或开机自启时的默认路径 —— 只放托盘图标、不开窗口，但会自动
+    启动本地服务（含 /v1 网关），停止/重启交给右键菜单。窗口模式（不开托盘）保持
+    旧行为以兼容 --smoke-test。
     """
     if os.name != "nt":
         raise RuntimeError("桌面 EXE 支持 Windows 10/11 x64")
@@ -759,15 +760,19 @@ def run(tray_mode: bool = False):
                           icon=str(ROOT / "desktop/assets/app.ico"))
             return
 
-        # Tray mode: no window, no services - both start from the tray menu.
+        # Tray mode: no window. The backend starts automatically so API clients can
+        # connect right after a double-click; stop/restart stay on the tray menu.
         # pywebview's GUI loop exits once every window is gone, so an invisible
         # 1x1 host window keeps the process resident between console sessions.
         threading.Thread(target=api._state_monitor, name="tray-state", daemon=True).start()
         webview.create_window("__tray_host__", html="<!doctype html><title></title>",
                               width=1, height=1, frameless=True, hidden=True)
-        tray.notify("MiraiHub 已在托盘运行，右键图标启动服务。")
+        tray.notify("MiraiHub 已在托盘运行，正在启动本地服务…")
         api.tray_startup_update_check = True
         def start_tray_shell():
+            # 双击启动即拉起本地服务（含 /v1 网关），否则 API 客户端连不上；
+            # Node 运行时与更新检查并行进行，不阻塞服务启动。
+            api.start()
             api.retry_runtime()
             threading.Thread(target=api._check_tray_startup_update,
                              name="startup-update", daemon=True).start()
