@@ -2670,7 +2670,7 @@ function bindRuntimeControls(groups) {
 
 function askRestartAfterSave() {
   openModal('<h3><span class="wb-icon mr-1"><svg class="wb-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg></span>配置已保存并即时生效</h3>' +
-    '<p class="my-3">一般无需重启。若想彻底刷新进程状态（例如刚恢复过备份），可立即重启：监督器会自动拉起新实例，约 10 秒恢复。</p>' +
+    '<p class="my-3">一般无需重启。若想彻底刷新进程状态（例如刚恢复过备份），可立即重启：新实例会自动拉起，约 5-10 秒恢复，页面随后自动重连。</p>' +
     '<div class="flex gap-2 justify-end mt-4"><button class="console-btn" onclick="closeModal()">暂不</button>' +
     '<button class="console-btn rt-restart-btn" id="restartSvcBtn" onclick="WBReview.doRestartService()"><span class="wb-icon "><svg class="wb-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></svg></span>立即重启</button></div>', 'max-w-lg');
 }

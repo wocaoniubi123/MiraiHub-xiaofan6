@@ -251,6 +251,15 @@ class DesktopAPI:
         self.start_lock = threading.Lock()
         self.runtime_lock = threading.Lock()
         self.update_lock = threading.Lock()
+        #: 区分「用户主动停止」与「后端意外退出」。
+        #:
+        #: `_state_monitor` 会在后端进程消失时自动拉起服务 —— 桌面模式下没有
+        #: main.py 监督器（`desktop_entry.py --backend` 直接 uvicorn.run），而
+        #: 网页面板的 POST /api/maintenance/restart 是 os._exit(0)，没人接管就会
+        #: 永久停摆。但托盘菜单的「停止服务」也会让 running() 变 False，不区分的话
+        #: 用户点停止后会被立刻重新拉起，变成关不掉。所以在 stop_services() 里置位，
+        #: monitor 消费一次后清零。
+        self.intentional_stop = False
         # Assigned immediately after construction; a no-op stub keeps every call
         # site safe even if construction fails before the tray is attached.
         self.tray = _NullTray()
@@ -586,11 +595,36 @@ class DesktopAPI:
         self.window = None
 
     def _state_monitor(self):
-        """Reconcile the tray badge when the backend dies on its own."""
+        """后端进程消失时自动拉起，顺带把托盘角标改成真实状态。
+
+        桌面模式没有 main.py 的监督器（`desktop_entry.py --backend` 直接
+        `uvicorn.run()`）。网页面板的 POST /api/maintenance/restart 走
+        `os._exit(0)`，退出后没有任何东西接管 —— 所以这里必须自己重启，
+        否则「重启网关」这个按钮等于「永久停止服务」。
+
+        判断顺序（不能反过来）：
+          1. 进程活着     -> 清 intentional_stop（上一轮的停止意图已作废）
+          2. 主动停止过   -> 清标志后跳过，不重启（托盘「停止服务」靠这个生效）
+          3. 已非 running -> 跳过，避免启动失败时每 2 秒一次无限重试
+          4. 其余         -> 曾处于 running 却没了进程 = 意外退出，自动重启
+
+        第 1 步必须独立于 tray.state：stop_services() 会先把 state 设成
+        stopped，若只在 state=="running" 时才清标志，标志会一直挂着，
+        把下一次面板重启误判成「主动停止」而不再拉起。
+        """
+        log = logging.getLogger("desktop.tray")
         while not self.closing.wait(2):
-            if self.tray.state == "running" and not self.running():
-                self.tray.set_state("stopped")
-                self.tray.notify("本地服务已退出，可从托盘菜单重新启动")
+            if self.running():
+                self.intentional_stop = False
+                continue
+            if self.intentional_stop:
+                self.intentional_stop = False
+                continue
+            if self.tray.state != "running":
+                continue
+            log.warning("本地服务已退出（非用户主动停止），自动重启")
+            self.tray.notify("本地服务已退出，正在重启…")
+            self.start()
 
     def quit(self):
         """Exit the application entirely (tray → 退出)."""
@@ -684,6 +718,9 @@ class DesktopAPI:
 
     def stop_services(self):
         """Stop the backend but keep the app resident so it can be restarted."""
+        # 置位后再终止：_state_monitor 每 2 秒轮询，不加这个标志就会把用户
+        # 主动停止当成意外退出而立刻重新拉起，菜单的「停止服务」将失效。
+        self.intentional_stop = True
         self.teardown_backend()
         self.tray.set_state("stopped")
         self.tray.notify("服务已停止")

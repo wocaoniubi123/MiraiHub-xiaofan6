@@ -217,8 +217,10 @@ async def restart_service(request: Request):
             raise HTTPException(429, f"重启太频繁，请 {int(60 - (now - _restart_last))} 秒后再试")
         _restart_last = now
     ip = request.client.host if request.client else "?"
+    # 桌面版没有 main.py 监督器：由托盘主进程的 _state_monitor 负责拉起新实例；
+    # 命令行/服务部署才由 main.py 的 _launch 监督器接管。两种模式都有人拉起。
     logging.getLogger("admin.maintenance").warning(
-        "管理员请求重启服务（ip=%s ua=%s），1.5 秒后退出 worker 交由监督器重生", ip,
+        "管理员请求重启服务（ip=%s ua=%s），1.5 秒后退出 worker 等待新的实例接管", ip,
         request.headers.get("user-agent", ""))
 
     def _exit_soon():
@@ -226,7 +228,7 @@ async def restart_service(request: Request):
         os._exit(0)
 
     threading.Thread(target=_exit_soon, daemon=True).start()
-    return {"ok": True, "message": "服务将在约 2 秒后重启（监督器自动拉起新实例），期间请求会短暂中断"}
+    return {"ok": True, "message": "服务将在约 2 秒后重启（桌面版由托盘进程自动拉起，命令行由 main.py 监督器拉起），期间请求会短暂中断"}
 
 
 @router.get("/credit-events")
